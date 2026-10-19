@@ -1,0 +1,366 @@
+// ============================================
+// Prisma Schema — Email Campaign Management System
+// Database: MySQL
+// ============================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum UserRole {
+  ADMIN
+  USER
+}
+
+enum SmtpProvider {
+  GMAIL
+  OUTLOOK
+  ZOHO
+  OFFICE365
+  CUSTOM
+}
+
+enum SmtpEncryption {
+  SSL
+  TLS
+  NONE
+}
+
+enum ContactStatus {
+  ACTIVE
+  INACTIVE
+  BOUNCED
+  UNSUBSCRIBED
+}
+
+enum TemplateType {
+  HTML
+  PLAIN
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  RUNNING
+  PAUSED
+  COMPLETED
+  CANCELLED
+  FAILED
+}
+
+enum RecipientStatus {
+  PENDING
+  QUEUED
+  SENDING
+  SENT
+  FAILED
+  BOUNCED
+}
+
+enum NotificationType {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+}
+
+// ============================================
+// USER MODEL
+// ============================================
+
+model User {
+  id            String    @id @default(uuid())
+  name          String    @db.VarChar(100)
+  email         String    @unique @db.VarChar(255)
+  password      String    @db.VarChar(255)
+  role          UserRole  @default(USER)
+  avatar        String?   @db.VarChar(500)
+  phone         String?   @db.VarChar(20)
+  company       String?   @db.VarChar(100)
+  isActive      Boolean   @default(true)
+  refreshToken  String?   @db.Text
+  resetToken    String?   @db.VarChar(255)
+  resetTokenExp DateTime?
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  smtpAccounts   SmtpAccount[]
+  contacts       Contact[]
+  templates      Template[]
+  campaigns      Campaign[]
+  activityLogs   ActivityLog[]
+  notifications  Notification[]
+
+  @@index([email])
+  @@index([role])
+  @@index([isActive])
+  @@map("users")
+}
+
+// ============================================
+// SMTP ACCOUNT MODEL
+// ============================================
+
+model SmtpAccount {
+  id                String         @id @default(uuid())
+  name              String         @db.VarChar(100)
+  host              String         @db.VarChar(255)
+  port              Int
+  username          String         @db.VarChar(255)
+  encryptedPassword String         @db.Text
+  encryption        SmtpEncryption @default(TLS)
+  fromEmail         String         @db.VarChar(255)
+  fromName          String         @db.VarChar(100)
+  provider          SmtpProvider   @default(CUSTOM)
+  isDefault         Boolean        @default(false)
+  isEnabled         Boolean        @default(true)
+  maxPerHour        Int            @default(100)
+  maxPerDay         Int            @default(2000)
+  sentToday         Int            @default(0)
+  sentThisHour      Int            @default(0)
+  lastResetAt       DateTime       @default(now())
+  userId            String
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  // Relations
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  campaigns Campaign[]
+
+  @@index([userId])
+  @@index([isDefault])
+  @@index([isEnabled])
+  @@index([provider])
+  @@map("smtp_accounts")
+}
+
+// ============================================
+// CONTACT MODEL
+// ============================================
+
+model Contact {
+  id           String        @id @default(uuid())
+  email        String        @db.VarChar(255)
+  firstName    String?       @db.VarChar(100)
+  lastName     String?       @db.VarChar(100)
+  company      String?       @db.VarChar(100)
+  phone        String?       @db.VarChar(20)
+  tags         String?       @db.Text // JSON array of tags
+  groupName    String?       @db.VarChar(100)
+  status       ContactStatus @default(ACTIVE)
+  isSubscribed Boolean       @default(true)
+  metadata     String?       @db.Text // Additional JSON data
+  source       String?       @db.VarChar(50) // manual, csv, excel
+  userId       String
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  // Relations
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  campaignRecipients CampaignRecipient[]
+
+  @@unique([email, userId]) // Prevent duplicate emails per user
+  @@index([userId])
+  @@index([email])
+  @@index([groupName])
+  @@index([status])
+  @@index([isSubscribed])
+  @@map("contacts")
+}
+
+// ============================================
+// TEMPLATE MODEL
+// ============================================
+
+model Template {
+  id          String       @id @default(uuid())
+  name        String       @db.VarChar(200)
+  subject     String       @db.VarChar(500)
+  htmlContent String?      @db.LongText
+  textContent String?      @db.LongText
+  type        TemplateType @default(HTML)
+  variables   String?      @db.Text // JSON array of variable names
+  thumbnail   String?      @db.VarChar(500)
+  isActive    Boolean      @default(true)
+  userId      String
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  // Relations
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  campaigns Campaign[]
+
+  @@index([userId])
+  @@index([type])
+  @@index([isActive])
+  @@map("templates")
+}
+
+// ============================================
+// CAMPAIGN MODEL
+// ============================================
+
+model Campaign {
+  id              String         @id @default(uuid())
+  name            String         @db.VarChar(200)
+  subject         String         @db.VarChar(500)
+  status          CampaignStatus @default(DRAFT)
+  scheduledAt     DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  totalRecipients Int            @default(0)
+  sent            Int            @default(0)
+  failed          Int            @default(0)
+  opened          Int            @default(0)
+  clicked         Int            @default(0)
+  bounced         Int            @default(0)
+  batchSize       Int            @default(50)
+  delayMs         Int            @default(1000) // Delay between batches in ms
+  retryAttempts   Int            @default(3)
+  contactGroup    String?        @db.VarChar(100)
+  userId          String
+  smtpAccountId   String
+  templateId      String
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  // Relations
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  smtpAccount SmtpAccount         @relation(fields: [smtpAccountId], references: [id], onDelete: Restrict)
+  template    Template            @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  recipients  CampaignRecipient[]
+  attachments Attachment[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([smtpAccountId])
+  @@index([templateId])
+  @@index([scheduledAt])
+  @@index([createdAt])
+  @@map("campaigns")
+}
+
+// ============================================
+// CAMPAIGN RECIPIENT MODEL
+// ============================================
+
+model CampaignRecipient {
+  id         String          @id @default(uuid())
+  status     RecipientStatus @default(PENDING)
+  sentAt     DateTime?
+  error      String?         @db.Text
+  retryCount Int             @default(0)
+  campaignId String
+  contactId  String
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  // Relations
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact  Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, contactId]) // Prevent duplicate recipients
+  @@index([campaignId])
+  @@index([contactId])
+  @@index([status])
+  @@map("campaign_recipients")
+}
+
+// ============================================
+// ATTACHMENT MODEL
+// ============================================
+
+model Attachment {
+  id           String   @id @default(uuid())
+  filename     String   @db.VarChar(255) // Stored filename
+  originalName String   @db.VarChar(255) // Original upload name
+  mimeType     String   @db.VarChar(100)
+  size         Int // Size in bytes
+  path         String   @db.VarChar(500)
+  campaignId   String
+  createdAt    DateTime @default(now())
+
+  // Relations
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@map("attachments")
+}
+
+// ============================================
+// ACTIVITY LOG MODEL
+// ============================================
+
+model ActivityLog {
+  id        String   @id @default(uuid())
+  action    String   @db.VarChar(100) // e.g., "CREATE", "UPDATE", "DELETE", "LOGIN"
+  entity    String   @db.VarChar(50) // e.g., "Campaign", "Contact", "SmtpAccount"
+  entityId  String?  @db.VarChar(100)
+  details   String?  @db.Text // JSON with additional context
+  ipAddress String?  @db.VarChar(45) // Supports IPv6
+  userAgent String?  @db.VarChar(500)
+  userId    String
+  createdAt DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([entity])
+  @@index([action])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
+// ============================================
+// SETTING MODEL
+// ============================================
+
+model Setting {
+  id        String   @id @default(uuid())
+  key       String   @unique @db.VarChar(100)
+  value     String   @db.Text
+  type      String   @default("string") @db.VarChar(20) // string, number, boolean, json
+  label     String?  @db.VarChar(200)
+  group     String?  @db.VarChar(50) // e.g., "general", "email", "security"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([key])
+  @@index([group])
+  @@map("settings")
+}
+
+// ============================================
+// NOTIFICATION MODEL
+// ============================================
+
+model Notification {
+  id        String           @id @default(uuid())
+  title     String           @db.VarChar(200)
+  message   String           @db.Text
+  type      NotificationType @default(INFO)
+  isRead    Boolean          @default(false)
+  link      String?          @db.VarChar(500)
+  userId    String
+  createdAt DateTime         @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
