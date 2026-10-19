@@ -402,4 +402,8 @@ All backend endpoints are prefixed with `/api`.
 
 ## 📄 License
 
+<<<<<<< HEAD
 This project is licensed under the [MIT License](LICENSE).
+=======
+This project is licensed under the [MIT License](LICENSE).
+>>>>>>> 5571c8a38ebf7eb92380a201f7fe3b9639961108
